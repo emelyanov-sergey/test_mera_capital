@@ -7,8 +7,8 @@ from sqlalchemy.engine import Connection
 
 from alembic import context
 
-from backend.core.db_connetcion import DATABASE_URL
-from backend.core.db_model import DeribitIndex, Base
+from backend.db.db_connetcion import DATABASE_URL
+from backend.db.db_model import DeribitIndex, Base
 
 
 # this is the Alembic Config object, which provides

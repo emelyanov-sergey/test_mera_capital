@@ -4,12 +4,18 @@ from sqlalchemy import select
 from typing import Optional, List
 from datetime import datetime, time
 
-from .db_model import DeribitIndex
-from .db_connetcion import get_async_session
+from db.db_model import DeribitIndex
+from db.db_connetcion import get_async_session
 from .schema import IndexSchema
 
 
 router = APIRouter()
+
+
+async def get_ticker_data(db: AsyncSession, query):
+    """Общая функция для выполнения запросов к БД"""
+    result = await db.execute(query)
+    return result.scalars()
 
 
 @router.get("/all_prices/{ticker}", response_model=List[IndexSchema])
@@ -23,18 +29,17 @@ async def get_all_prices_by_ticker(
     Этот эндпоинт возвращает все записанные цены для заданного тикера:
     BTC или ETH.
     """
-    query = await db.execute(
-        select(DeribitIndex).filter_by(ticker=ticker.upper())
-    )
-    results = query.scalars().all()
+    query = select(DeribitIndex).filter_by(ticker=ticker.upper())
+    result = await get_ticker_data(db, query)
+    all_results = result.all()
 
-    if not results:
+    if not all_results:
         raise HTTPException(
             status_code=404,
             detail="Prices not found for the specified ticker"
         )
 
-    return results
+    return all_results
 
 
 @router.get("/latest-price/{tiker}", response_model=IndexSchema)
@@ -48,12 +53,20 @@ async def get_latest_prices(
     Этот эндпоинт возвращает самую последнюю запись цены для заданного тикера:
     BTC или ETH.
     """
-    query = await db.execute(
+    query = (
         select(DeribitIndex)
         .filter_by(ticker=ticker.upper())
         .order_by(DeribitIndex.created_at.desc())
     )
-    last_price = query.scalars().first()
+    results = await get_ticker_data(db, query)
+    last_price = results.first()
+
+    if not last_price:
+        raise HTTPException(
+            status_code=404,
+            detail="Latest price not found for the specified ticker"
+        )
+
     return last_price
 
 
@@ -79,7 +92,8 @@ async def get_prices_by_ticker(
             end_of_day = datetime.combine(date_obj, time(23, 59, 59))
             start_timestamp = int(start_of_day.timestamp())
             end_timestamp = int(end_of_day.timestamp())
-            query = await db.execute(
+
+            query = (
                 select(DeribitIndex)
                 .filter(
                     DeribitIndex.ticker == ticker.upper(),
@@ -88,20 +102,22 @@ async def get_prices_by_ticker(
                 )
                 .order_by(DeribitIndex.created_at)
             )
-            result = query.scalars().first()
-
+            results = await get_ticker_data(db, query)
+            result = results.first()
         except ValueError:
             raise HTTPException(
                 status_code=400,
                 detail="Invalid start date format. Use YYYY-MM-DD."
             )
+
     else:
-        query = await db.execute(
+        query = (
             select(DeribitIndex)
             .filter_by(ticker=ticker.upper())
             .order_by(DeribitIndex.created_at.desc())
         )
-        result = query.scalars().first()
+        results = await get_ticker_data(db, query)
+        result = results.first()
 
     if not result:
         raise HTTPException(

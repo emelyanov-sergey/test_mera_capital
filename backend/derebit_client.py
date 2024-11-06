@@ -1,46 +1,90 @@
 import aiohttp
+import asyncio
 import ssl
 import certifi
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
+from typing import List, Dict
 
-from core.db_model import DeribitIndex
+from db.db_model import DeribitIndex
 from core.logger import logger
 
 
-async def get_index_price(async_session: AsyncSession):
-    index_names = [
-        "btc_usd",
-        "eth_usd",
-    ]
-    ssl_context = ssl.create_default_context(cafile=certifi.where())
-    conn = aiohttp.TCPConnector(ssl=ssl_context)
-    get_index_price_url = "https://test.deribit.com/api/v2/public/" \
-                          "get_index_price?index_name="
-    async with aiohttp.ClientSession(connector=conn) as session:
-        for i in index_names:
-            try:
-                async with session.get(
-                    get_index_price_url + str(i)
-                ) as response:
+async def fetch_single_index(
+        session: aiohttp.ClientSession, index_name: str
+) -> Dict:
+    """Получение данных для одного индекса"""
+    get_index_price_url = (
+        "https://test.deribit.com/api/v2/public/get_index_price"
+    )
+    try:
+        async with session.get(
+            f"{get_index_price_url}?index_name={index_name}"
+        ) as response:
+            r = await response.json()
+            price = str(r['result']['index_price'])
+            ticker = 'BTC' if index_name == "btc_usd" else 'ETH'
+            return {
+                'price': price,
+                'ticker': ticker,
+                'success': True
+            }
+    except Exception as e:
+        logger.error(f"Error fetching {index_name}: {str(e)}")
+        return {
+            'ticker': 'BTC' if index_name == "btc_usd" else 'ETH',
+            'success': False,
+            'error': str(e)
+        }
 
-                    r = await response.json()
-                    price = str(r['result']['index_price'])
-                    ticker = 'BTC' if i == "btc_usd" else 'ETH'
 
-                    object = DeribitIndex(
-                        price=price,
-                        ticker=ticker,
-                        created_at=int(datetime.utcnow().timestamp())
+async def save_all_to_db(async_session: AsyncSession, data_list: List[Dict]):
+    """Сохранение всех данных за одну транзакцию"""
+    current_timestamp = int(datetime.utcnow().timestamp())
+    objects_to_save = []
+
+    for data in data_list:
+        if data['success']:
+            index_object = DeribitIndex(
+                price=data['price'],
+                ticker=data['ticker'],
+                created_at=current_timestamp
+            )
+            objects_to_save.append(index_object)
+
+    if not objects_to_save:
+        logger.warning("No valid data to save")
+        return
+
+    try:
+        async with async_session() as session:
+            async with session.begin():
+                session.add_all(objects_to_save)
+                await session.commit()
+
+                for obj in objects_to_save:
+                    logger.info(
+                        f"Successfully saved {obj.ticker} price: {obj.price}"
                     )
 
-                    async with async_session() as db_session:
-                        async with db_session.begin():
-                            db_session.add(object)
-                            await db_session.commit()
-                            await db_session.flush()
-                            logger.info(
-                                f"Successfully saved {ticker} price: {price}"
-                            )
-            except Exception as e:
-                logger.error(f"Error fetching {i}: {str(e)}")
+    except Exception as e:
+        logger.error(f"Error saving batch to database: {str(e)}")
+        raise
+
+
+async def get_index_price(async_session: AsyncSession):
+    """Основная функция получения и сохранения данных"""
+    index_names = ["btc_usd", "eth_usd"]
+
+    # Настройка SSL
+    ssl_context = ssl.create_default_context(cafile=certifi.where())
+    connector = aiohttp.TCPConnector(ssl=ssl_context)
+
+    async with aiohttp.ClientSession(connector=connector) as session:
+        fetch_tasks = [
+            fetch_single_index(session, index_name)
+            for index_name in index_names
+        ]
+        results = await asyncio.gather(*fetch_tasks)
+
+        await save_all_to_db(async_session, results)

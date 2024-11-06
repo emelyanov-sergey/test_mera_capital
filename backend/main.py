@@ -2,10 +2,10 @@ from fastapi import FastAPI
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from contextlib import asynccontextmanager
 
-from core.db_connetcion import engine, async_session
+from db.db_connetcion import engine, async_session
 from derebit_client import get_index_price
-from core.db_model import Base
-from core.routers import router
+from db.db_model import Base
+from api.routers import router
 
 
 scheduler = AsyncIOScheduler()
